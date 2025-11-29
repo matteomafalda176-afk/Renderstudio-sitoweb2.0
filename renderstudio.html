@@ -1,0 +1,668 @@
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import * as THREE from 'three';
+// Import corretto per versioni recenti di Three.js (assicurati che il path sia corretto per il tuo ambiente di build)
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+
+// --- ICONS ---
+const Icon = ({ d, className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className}>
+    <path d={d} strokeLinecap="square" strokeLinejoin="miter" />
+  </svg>
+);
+
+const Icons = {
+  Arrow: <Icon d="M5 12h14M12 5l7 7-7 7" />,
+  Menu: <Icon d="M3 12h18M3 6h18M3 18h18" />,
+  Close: <Icon d="M18 6L6 18M6 6l12 12" />,
+  Hex: <Icon d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z" />,
+  Play: <Icon d="M5 3l14 9-14 9V3z" />,
+  Chip: <Icon d="M2 9h20M2 15h20M9 2v20M15 2v20" />,
+  Eye: <Icon d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />,
+  Code: <Icon d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
+  Target: <Icon d="M22 12h-4l-3 9L9 3l-3 9H2" />,
+  Wand: <Icon d="M15 4l6 2-6 2-2 6-2-6-6-2 6-2 2-6z" />,
+  Download: <Icon d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+};
+
+// --- 3D BACKGROUND: MAIN SCENE (GLB Loader) ---
+const MercuryBackground = () => {
+  const mount = useRef(null);
+  const mouseRef = useRef({ x: 0, y: 0, isOver: false });
+  // Riferimento all'oggetto caricato
+  const objectRef = useRef(null);
+  const mixerRef = useRef(null);
+  
+  useEffect(() => {
+    const scene = new THREE.Scene();
+    // Nebbia leggermente più densa per integrare meglio il modello
+    scene.fog = new THREE.FogExp2(0x000000, 0.03);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 15);
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Tone mapping per un look più cinematografico sui metalli
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    
+    if (mount.current) mount.current.appendChild(renderer.domElement);
+
+    // --- LIGHTS ---
+    // Illuminazione ottimizzata per riflessi metallici
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+
+    const mainLight = new THREE.DirectionalLight(0xffffff, 2);
+    mainLight.position.set(5, 10, 7);
+    scene.add(mainLight);
+
+    const rimLight = new THREE.SpotLight(0x4444ff, 5);
+    rimLight.position.set(-10, 0, -5);
+    rimLight.lookAt(0,0,0);
+    scene.add(rimLight);
+
+    const warmLight = new THREE.PointLight(0xffaa00, 2);
+    warmLight.position.set(10, -5, 5);
+    scene.add(warmLight);
+
+    // --- CARICAMENTO GLB ---
+    const loader = new GLTFLoader();
+    
+    // Fallback: Sfera Wireframe mentre carica (o se fallisce)
+    const fallbackGeo = new THREE.IcosahedronGeometry(4, 1);
+    const fallbackMat = new THREE.MeshBasicMaterial({ 
+        color: 0x333333, 
+        wireframe: true 
+    });
+    const fallbackMesh = new THREE.Mesh(fallbackGeo, fallbackMat);
+    scene.add(fallbackMesh);
+    objectRef.current = fallbackMesh;
+
+    loader.load(
+      './animazione.glb', // Assicurati che il file sia in 'public'
+      (gltf) => {
+        console.log("GLB Caricato!");
+        
+        // Rimuovi fallback
+        if(fallbackMesh.parent) scene.remove(fallbackMesh);
+        
+        const model = gltf.scene;
+        
+        // Auto-centramento e auto-scaling
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center); // Centra il pivot
+        
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const targetSize = 10; // Dimensione desiderata nella scena
+        const scale = targetSize / maxDim;
+        model.scale.setScalar(scale);
+
+        // Setup Animazioni
+        if (gltf.animations && gltf.animations.length > 0) {
+            mixerRef.current = new THREE.AnimationMixer(model);
+            gltf.animations.forEach((clip) => {
+                const action = mixerRef.current.clipAction(clip);
+                action.play();
+                // Assicura che l'animazione sia fluida
+                action.timeScale = 1.0; 
+            });
+        }
+
+        // Miglioramento Materiali (Opzionale)
+        model.traverse((child) => {
+            if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                if(child.material) {
+                    // Forza il rinnovo delle envMap se necessario
+                    child.material.envMapIntensity = 1.0;
+                    child.material.needsUpdate = true;
+                }
+            }
+        });
+
+        scene.add(model);
+        objectRef.current = model;
+      },
+      (xhr) => {
+          console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+      },
+      (error) => {
+          console.error("Errore caricamento GLB:", error);
+          // Mantiene il fallback mesh se c'è errore
+      }
+    );
+
+    // --- EVENTS ---
+    const handleMouseMove = (e) => {
+      const rect = mount.current.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      mouseRef.current.isOver = true;
+    };
+
+    const handleMouseLeave = () => {
+      mouseRef.current.isOver = false;
+    };
+
+    if(mount.current) {
+        mount.current.addEventListener('mousemove', handleMouseMove);
+        mount.current.addEventListener('mouseleave', handleMouseLeave);
+    }
+
+    // --- ANIMATION LOOP ---
+    const clock = new THREE.Clock();
+    
+    const animate = () => {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      
+      // Update animazioni GLB
+      if (mixerRef.current) mixerRef.current.update(delta);
+
+      // Rotazione Fallback se attivo
+      if (objectRef.current === fallbackMesh) {
+          fallbackMesh.rotation.y += delta * 0.5;
+          fallbackMesh.rotation.x += delta * 0.2;
+      }
+
+      // Parallax interattivo soft sull'oggetto principale
+      if (objectRef.current && objectRef.current !== fallbackMesh) {
+          // Rotazione sottile basata sul mouse
+          const targetRotX = mouseRef.current.y * 0.2;
+          const targetRotY = mouseRef.current.x * 0.2;
+          
+          objectRef.current.rotation.x += (targetRotX - objectRef.current.rotation.x) * 0.05;
+          objectRef.current.rotation.y += (targetRotY - objectRef.current.rotation.y) * 0.05;
+      }
+
+      // Movimento Camera fluido
+      const camTargetX = mouseRef.current.x * 2;
+      const camTargetY = mouseRef.current.y * 2;
+      camera.position.x += (camTargetX - camera.position.x) * 0.05;
+      camera.position.y += (camTargetY - camera.position.y) * 0.05;
+      camera.lookAt(0, 0, 0);
+
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    const handleResize = () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (mount.current) {
+        mount.current.innerHTML = '';
+        mount.current.removeEventListener('mousemove', handleMouseMove);
+        mount.current.removeEventListener('mouseleave', handleMouseLeave);
+      }
+    };
+  }, []);
+
+  return <div ref={mount} className="fixed inset-0 z-[-1] opacity-80 pointer-events-auto" />;
+};
+
+// --- CUSTOM CURSOR ---
+const CustomCursor = () => {
+  const cursorRef = useRef(null);
+  const cursorInnerRef = useRef(null);
+  
+  useEffect(() => {
+    if (window.matchMedia("(pointer: coarse)").matches) return;
+
+    const move = (e) => {
+      if (cursorRef.current) {
+        const x = e.clientX - 20;
+        const y = e.clientY - 20;
+        cursorRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      }
+      if (cursorInnerRef.current) {
+        const x = e.clientX - 3;
+        const y = e.clientY - 3;
+        cursorInnerRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      }
+    };
+    window.addEventListener('mousemove', move);
+    return () => window.removeEventListener('mousemove', move);
+  }, []);
+
+  return (
+    <>
+      <style>{`
+        body { cursor: none; }
+        @media (pointer: coarse) { body { cursor: auto; } }
+      `}</style>
+      <div ref={cursorRef} className="fixed top-0 left-0 w-10 h-10 border border-white/50 pointer-events-none z-[9999] mix-blend-difference transition-transform duration-100 ease-out hidden md:block" />
+      <div ref={cursorInnerRef} className="fixed top-0 left-0 w-1.5 h-1.5 bg-white pointer-events-none z-[9999] mix-blend-difference hidden md:block" />
+    </>
+  );
+};
+
+// --- COMPONENTS ---
+
+const Loader = ({ onComplete }) => {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const int = setInterval(() => {
+      setCount(prev => {
+        if (prev >= 100) {
+          clearInterval(int);
+          setTimeout(onComplete, 500);
+          return 100;
+        }
+        return prev + 2;
+      });
+    }, 20);
+    return () => clearInterval(int);
+  }, [onComplete]);
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center">
+      <div className="text-chrome font-display text-6xl md:text-9xl font-bold tracking-tighter animate-pulse">
+        {count}%
+      </div>
+      <div className="mt-4 w-64 h-[2px] bg-gray-800 overflow-hidden">
+        <div className="h-full bg-white transition-all ease-linear" style={{ width: `${count}%` }}></div>
+      </div>
+      <div className="mt-2 font-mono text-xs text-gray-500 uppercase tracking-widest">System Initialization</div>
+    </div>
+  );
+};
+
+const Navbar = () => {
+  const [open, setOpen] = useState(false);
+  const scrollTo = (id) => {
+    setOpen(false);
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  return (
+    <nav className="fixed top-0 w-full z-50 border-b border-white/10 bg-black/90 backdrop-blur-md">
+      <div className="max-w-7xl mx-auto px-6 h-20 flex justify-between items-center">
+        <div className="font-display text-2xl font-bold text-white tracking-widest cursor-pointer hover:animate-pulse" onClick={() => scrollTo('home')}>
+          RENDER<span className="text-gray-500">STUDIO</span>
+        </div>
+
+        <div className="hidden md:flex gap-12">
+          {['SERVIZI', 'PORTFOLIO', 'CHI SIAMO', 'CONTATTI'].map(item => (
+            <button key={item} onClick={() => scrollTo(item.toLowerCase().replace(' ', ''))} className="font-mono text-xs text-gray-400 hover:text-white transition-colors uppercase tracking-widest relative group">
+              {item}
+              <span className="absolute -bottom-2 left-0 w-0 h-[1px] bg-white group-hover:w-full transition-all duration-300"></span>
+            </button>
+          ))}
+        </div>
+
+        <button className="md:hidden text-white" onClick={() => setOpen(!open)}>
+          <div className="w-6 h-6">{open ? Icons.Close : Icons.Menu}</div>
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute top-20 left-0 w-full h-screen bg-black flex flex-col p-10 gap-8">
+          {['SERVIZI', 'PORTFOLIO', 'CHI SIAMO', 'CONTATTI'].map(item => (
+            <button key={item} onClick={() => scrollTo(item.toLowerCase().replace(' ', ''))} className="font-display text-4xl text-white text-left border-b border-white/10 pb-4 hover:pl-4 transition-all">
+              {item}
+            </button>
+          ))}
+        </div>
+      )}
+    </nav>
+  );
+};
+
+const Hero = () => {
+    const [visible, setVisible] = useState(false);
+    useEffect(() => { setTimeout(() => setVisible(true), 500) }, []);
+
+  return (
+    <section id="home" className="relative min-h-screen flex flex-col justify-center px-6 overflow-hidden bg-transparent">
+      {/* Background grid rimossa o resa più sottile per far vedere il GLB */}
+      <div className="absolute inset-0 bg-tech-grid opacity-30 pointer-events-none z-0"></div>
+      
+      <div className={`max-w-7xl mx-auto w-full relative z-10 transition-all duration-1000 transform ${visible ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0'}`}>
+        <div className="mb-6 flex items-center gap-4">
+          <div className="w-3 h-3 bg-white animate-pulse"></div>
+          <span className="font-mono text-xs text-gray-400 tracking-[0.3em] uppercase">Digital Production House</span>
+        </div>
+
+        <h1 className="text-6xl md:text-9xl font-display font-bold leading-none uppercase tracking-tighter mb-8 mix-blend-difference">
+          <div className="overflow-hidden"><span className="inline-block text-white">Future</span></div>
+          <div className="overflow-hidden"><span className="inline-block text-transparent text-stroke stroke-white/50" style={{ WebkitTextStroke: '1px rgba(255,255,255,0.5)' }}>Proof</span></div>
+          <div className="overflow-hidden"><span className="inline-block text-white">Creation</span></div>
+        </h1>
+
+        <p className="font-mono text-gray-400 text-sm md:text-base max-w-xl leading-relaxed mb-12 border-l-2 border-white/20 pl-6 bg-black/40 backdrop-blur-sm p-4 rounded-r-lg">
+          Partner strategico nella produzione di contenuti aziendali. Dalla concept alla distribuzione, co-creiamo narrazioni di valore che definiscono il domani.
+        </p>
+
+        <div className="flex gap-6">
+          <button onClick={() => document.getElementById('servizi').scrollIntoView({ behavior: 'smooth' })} className="bg-white text-black px-8 py-4 font-bold font-mono text-xs uppercase tracking-widest hover:bg-gray-200 transition-colors border border-white">
+            Explore System
+          </button>
+          <button onClick={() => document.getElementById('contatti').scrollIntoView({ behavior: 'smooth' })} className="px-8 py-4 font-bold font-mono text-xs uppercase tracking-widest text-white border border-white/20 hover:border-white transition-colors bg-black/50 backdrop-blur-sm">
+            Initialize Contact
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+const Services = ({ onAI }) => {
+  const services = [
+    {
+      t: "Analisi degli Obiettivi",
+      d: "Analisi approfondita dei vostri obiettivi di comunicazione per sviluppare strategie video efficaci e misurabili.",
+      i: Icons.Hex,
+      sub: ["Strategia", "KPI", "Targeting"]
+    },
+    {
+      t: "Storytelling",
+      d: "Creazione di narrazioni coinvolgenti che comunicano i valori del vostro brand in modo autentico ed emozionale.",
+      i: Icons.Chip,
+      sub: ["Script", "Concept", "Regia"]
+    },
+    {
+      t: "Video Editing",
+      d: "Montaggio professionale e post-produzione per video aziendali, promozionali e contenuti per social media.",
+      i: Icons.Play,
+      sub: ["Montaggio", "Color", "Sound"]
+    },
+    {
+      t: "Motion Graphics",
+      d: "Animazioni dinamiche, grafica in movimento e visualizzazioni 3D per comunicare in modo innovativo.",
+      i: Icons.Eye,
+      sub: ["3D", "2D", "VFX"]
+    },
+    {
+      t: "Postproduzione Avanzata",
+      d: "Tecniche avanzate di postproduzione per elevare la qualità visiva dei vostri contenuti video.",
+      i: Icons.Wand,
+      sub: ["Compositing", "CGI", "Retouch"]
+    }
+  ];
+
+  return (
+    <section id="servizi" className="py-32 border-t border-white/10 bg-black relative z-10">
+      <div className="max-w-7xl mx-auto px-6">
+        <div className="flex justify-between items-end mb-24">
+          <div>
+            <h2 className="text-5xl font-display font-bold text-chrome mb-4">SERVIZI</h2>
+            <p className="font-mono text-gray-500 text-xs uppercase tracking-widest">Modular Service Architecture</p>
+          </div>
+          <span className="font-mono text-gray-500 text-xl opacity-50">01</span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-8">
+          {services.map((item, i) => (
+            <div key={i} className="border-glow bg-black/80 group">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center p-8 md:p-10">
+
+                <div className="md:col-span-2 flex flex-row md:flex-col items-center md:items-start gap-4 border-b md:border-b-0 md:border-r border-white/10 pb-4 md:pb-0 md:pr-4">
+                  <span className="font-mono text-gray-600 text-xl">0{i + 1}</span>
+                  <div className="text-white w-8 h-8 group-hover:scale-110 transition-transform duration-500">{item.i}</div>
+                </div>
+
+                <div className="md:col-span-7">
+                  <h3 className="text-2xl md:text-3xl font-display text-white mb-4 group-hover:text-chrome transition-colors">{item.t}</h3>
+                  <p className="font-mono text-sm text-gray-400 leading-loose w-full md:w-3/4">
+                    {item.d}
+                  </p>
+                </div>
+
+                <div className="md:col-span-3 flex flex-wrap gap-2 justify-start md:justify-end items-center">
+                  {item.sub.map((tag, k) => (
+                    <span key={k} className="px-3 py-1 border border-white/20 text-[10px] font-mono uppercase tracking-widest text-gray-400 hover:text-white hover:border-white transition-colors cursor-default">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="absolute bottom-0 left-0 h-[2px] bg-white w-full transform scale-x-0 group-hover:scale-x-100 transition-transform duration-700 origin-left"></div>
+            </div>
+          ))}
+
+          <div className="border-glow p-12 bg-white/5 border-white/20 flex flex-col md:flex-row justify-between items-center text-center md:text-left group cursor-pointer relative overflow-hidden" onClick={onAI}>
+            <div className="absolute inset-0 bg-white/5 transform translate-y-full group-hover:translate-y-0 transition-transform duration-500"></div>
+            <div className="relative z-10 mb-6 md:mb-0">
+              <h3 className="text-3xl font-display text-white mb-2">AI DIRECTOR</h3>
+              <p className="font-mono text-xs text-gray-400">Neural Concept Generation Engine // V.2.0</p>
+            </div>
+            <div className="relative z-10">
+              <button className="w-16 h-16 border border-white rounded-full flex items-center justify-center hover:bg-white hover:text-black transition-all animate-pulse-fast">
+                <div className="w-6 h-6">{Icons.Hex}</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+const Portfolio = () => {
+  const projects = [
+    { t: "NEON CITY", c: "Automotive", img: "https://image.pollinations.ai/prompt/silver%20cyberpunk%20car%20in%20rainy%20neon%20city%20night%20reflection%208k%20aspect%2016:9" },
+    { t: "OBSIDIAN", c: "Luxury", img: "https://image.pollinations.ai/prompt/black%20diamond%20ring%20on%20dark%20glossy%20surface%20studio%20light%20macro%208k%20aspect%2016:9" },
+    { t: "CHROME", c: "Fashion", img: "https://image.pollinations.ai/prompt/futuristic%20silver%20fashion%20model%20metallic%20clothing%20clean%20studio%208k%20aspect%2016:9" },
+    { t: "VOID", c: "Tech", img: "https://image.pollinations.ai/prompt/abstract%20black%20and%20white%20data%20center%20server%20lights%20minimalist%208k%20aspect%2016:9" },
+  ];
+
+  return (
+    <section id="portfolio" className="py-32 border-t border-white/10 bg-[#050505]">
+      <div className="max-w-7xl mx-auto px-6">
+        <div className="flex justify-between items-end mb-20">
+          <h2 className="text-5xl font-display font-bold text-chrome">ARCHIVE</h2>
+          <span className="font-mono text-gray-500">02 / SELECTED WORKS</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+          {projects.map((p, i) => (
+            <div key={i} className={`group cursor-pointer ${i % 2 !== 0 ? 'md:mt-24' : ''}`}>
+              <div className="relative aspect-video overflow-hidden border border-white/10 mb-6">
+                <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity z-10 mix-blend-overlay"></div>
+                <img src={p.img} alt={p.t} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 transform group-hover:scale-105" />
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                  <div className="w-16 h-16 bg-white text-black flex items-center justify-center rounded-full hover:scale-110 transition-transform">
+                    <div className="w-6 h-6 ml-1">{Icons.Play}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-between items-center border-b border-white/20 pb-4 group-hover:border-white transition-colors">
+                <h3 className="text-2xl font-display text-white">{p.t}</h3>
+                <span className="font-mono text-xs text-gray-500 uppercase tracking-widest">{p.c}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+};
+
+const About = () => (
+  <section id="chisiamo" className="py-32 border-t border-white/10 bg-black">
+    <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center">
+      <div>
+        <h2 className="text-5xl font-display font-bold text-chrome mb-8">CORE TEAM</h2>
+        <p className="font-mono text-gray-400 text-sm leading-loose mb-8">
+          Render Studio nasce nel 2025. Un collettivo di ingegneri visivi e direttori creativi. La nostra missione è l'estetica assoluta attraverso la tecnologia.
+        </p>
+        <div className="space-y-6 border-l border-white/20 pl-8">
+          {[
+            { n: "DAMIANO", r: "Dir. Creativa" },
+            { n: "ALESSANDRO", r: "Motion Lead" },
+            { n: "MATTEO", r: "3D Architect" }
+          ].map((m, i) => (
+            <div key={i}>
+              <h4 className="text-xl font-display text-white">{m.n}</h4>
+              <p className="text-xs font-mono text-gray-500 uppercase">{m.r}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="relative aspect-square border border-white/10 p-4 group">
+        <img src="https://image.pollinations.ai/prompt/abstract%20wireframe%20head%20sculpture%20cyberpunk%20style%20black%20background%208k%20aspect%201:1" alt="About" className="w-full h-full object-cover grayscale opacity-60 group-hover:opacity-100 transition-opacity" />
+        <div className="absolute inset-0 border border-white/5 scale-95 group-hover:scale-100 transition-transform duration-700"></div>
+      </div>
+    </div>
+  </section>
+);
+
+const Footer = () => (
+  <footer id="contatti" className="border-t border-white/10 bg-[#050505] pt-20 pb-10">
+    <div className="max-w-7xl mx-auto px-6">
+      <div className="grid md:grid-cols-2 gap-20 mb-20">
+        <div>
+          <h2 className="text-6xl md:text-8xl font-display font-bold text-white mb-8 tracking-tighter leading-[0.8]">
+            START<br /><span className="text-transparent text-stroke stroke-white" style={{ WebkitTextStroke: '1px #fff' }}>PROJECT</span>
+          </h2>
+          <button className="px-8 py-4 bg-white text-black font-mono font-bold text-xs uppercase tracking-widest hover:bg-gray-300 transition-colors">
+            Invia Brief
+          </button>
+        </div>
+        <div className="flex flex-col justify-end text-right font-mono text-sm text-gray-400 space-y-2">
+          <p>info@renderstudio.it</p>
+          <p>+39 0438 123 456</p>
+          <p>Vittorio Veneto, Italy</p>
+        </div>
+      </div>
+      <div className="border-t border-white/10 pt-8 flex justify-between items-center font-mono text-[10px] text-gray-600 uppercase tracking-widest">
+        <p>© 2025 RENDER STUDIO</p>
+        <div className="flex gap-6">
+          <span>Instagram</span>
+          <span>LinkedIn</span>
+        </div>
+      </div>
+    </div>
+  </footer>
+);
+
+const AIModal = ({ isOpen, onClose }) => {
+  if (!isOpen) return null;
+  const [log, setLog] = useState([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      const steps = ["Connecting to Neural Net...", "Analyzing Brand DNA...", "Generating Concepts..."];
+      let i = 0;
+      const interval = setInterval(() => {
+        if (i < steps.length) {
+          setLog(prev => [...prev, steps[i]]);
+          i++;
+        } else {
+          clearInterval(interval);
+        }
+      }, 800);
+      return () => clearInterval(interval);
+    } else {
+      setLog([]);
+    }
+  }, [isOpen]);
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-lg flex items-center justify-center p-6 font-mono">
+      <div className="w-full max-w-2xl border border-white/20 bg-black p-1 text-green-500 shadow-[0_0_50px_rgba(0,255,0,0.1)] relative">
+        <div className="border-b border-white/20 p-2 flex justify-between items-center bg-white/5">
+          <span className="text-xs uppercase tracking-widest">AI_TERMINAL_V.2.0</span>
+          <button onClick={onClose} className="text-white hover:text-red-500"><div className="w-4 h-4">{Icons.Close}</div></button>
+        </div>
+        <div className="p-8 h-96 overflow-y-auto">
+          {log.map((l, i) => (
+            <div key={i} className="mb-2 text-xs opacity-70">&gt; {l}</div>
+          ))}
+          {log.length === 3 && (
+            <div className="mt-8 animate-pulse text-white">
+              <h4 className="text-lg font-bold mb-4 text-white border-b border-white/20 pb-2 inline-block">OUTPUT GENERATED:</h4>
+              <ul className="space-y-4 text-sm text-gray-300">
+                <li>[01] <span className="text-white font-bold">Urban Chrome:</span> Toni metallici, riflessi urbani, ritmo sincopato.</li>
+                <li>[02] <span className="text-white font-bold">Liquid Noir:</span> Contrasto estremo, fluidi neri, sound design ASMR.</li>
+                <li>[03] <span className="text-white font-bold">Glass Future:</span> Trasparenze, luci bianche asettiche, minimalismo.</li>
+              </ul>
+              <button className="mt-8 text-xs border border-green-500 text-green-500 px-4 py-2 hover:bg-green-500 hover:text-black transition-colors">EXPORT DATA</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- MAIN APP ---
+export default function App() {
+  const [loading, setLoading] = useState(true);
+  const [aiOpen, setAiOpen] = useState(false);
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Space+Mono:wght@400;700&family=Syncopate:wght@400;700&display=swap');
+        
+        .font-display { font-family: 'Syncopate', sans-serif; }
+        .font-mono { font-family: 'Space Mono', monospace; }
+        .font-sans { font-family: 'Inter', sans-serif; }
+
+        .text-chrome {
+          background: linear-gradient(to bottom, #FFFFFF 0%, #E0E0E0 40%, #888888 50%, #E0E0E0 60%, #FFFFFF 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          text-shadow: 0px 0px 20px rgba(255, 255, 255, 0.3);
+          filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));
+        }
+
+        .bg-tech-grid {
+          background-size: 40px 40px;
+          background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                           linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+          mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+          -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+        }
+
+        .border-glow {
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: 0 0 15px rgba(255, 255, 255, 0.05);
+          transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+          position: relative;
+          overflow: hidden;
+        }
+        .border-glow:hover {
+          border-color: rgba(255, 255, 255, 0.8);
+          box-shadow: 0 0 30px rgba(255, 255, 255, 0.2);
+          background: rgba(255, 255, 255, 0.02);
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: #000; }
+        ::-webkit-scrollbar-thumb { background: #fff; }
+      `}</style>
+      
+      <CustomCursor />
+      {loading ? (
+        <Loader onComplete={() => setLoading(false)} />
+      ) : (
+        <div className="bg-black text-white min-h-screen">
+          <MercuryBackground />
+          <Navbar />
+          <main>
+            <Hero />
+            <Services onAI={() => setAiOpen(true)} />
+            <Portfolio />
+            <About />
+          </main>
+          <Footer />
+          <AIModal isOpen={aiOpen} onClose={() => setAiOpen(false)} />
+        </div>
+      )}
+    </>
+  );
+}
